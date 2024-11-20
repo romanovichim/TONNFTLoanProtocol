@@ -1,0 +1,463 @@
+;;int min_tons_for_storage() asm "50000000 PUSHINT"; ;; 0.05 TON
+
+
+;;Storage max 1023 bits
+;;
+;; offer_index   ;; + stc  64
+;; деплоер info ref  ;; + ref
+  ;; Адрес деплоера
+  ;; Адрес коллекции заима
+  ;; Адрес роялти 
+;; владелец оффера ;; + max    267
+;; чек -статус офера ;; + stc  64
+
+;; nft_prev_owner 267 
+;; credit_start_time 32
+
+;; total: 64 * 2 + 267 * 2 + 32 =  694 maximum bits
+
+int min_tons_for_storage() asm "10000000 PUSHINT"; ;; 0.01 TON - итак есть
+;; Note that 2 * gas_consumptions is expected to be able to cover fees on nft collection check loop
+int gas_consumption() asm "15000000 PUSHINT"; ;; 0.015 TON
+
+slice royalty_msg()    asm "<b 124 word Royalty commission withdraw| $, b> <s PUSHSLICE";
+
+
+
+int division(int a, int b) { ;; division with factor
+    return muldiv(a, 1000000000 {- 1e9 -}, b);
+}
+
+int multiply(int a, int b) { ;; multiply with factor
+    return muldiv (a, b, 1000000000 {- 1e9 -});
+}
+
+int get_percent(int a, int percent, int factor) {
+    return division(multiply(a, percent), factor);
+}
+
+(int, int, slice, slice, cell) load_data() {
+    slice ds = get_data().begin_parse();
+    var (index, deployer_address) = (ds~load_uint(64), ds~load_msg_addr());
+    if (ds.slice_bits() > 0) {
+      return (-1, index, deployer_address, ds~load_msg_addr(), ds~load_ref());
+    } else {
+      return (0, index, deployer_address, null(), null()); ;; offer not initialized yet
+    }
+}
+
+() store_data(int index, slice deployer_address, slice owner_address, cell content) impure {
+    set_data(
+        begin_cell()
+            .store_uint(index, 64)
+            .store_slice(deployer_address)
+            .store_slice(owner_address)
+            .store_ref(content)
+            .end_cell()
+    );
+}
+
+() send_msg(slice to_address, int amount, int op, int query_id, builder payload, int send_mode) impure inline {
+  var msg = begin_cell()
+    .store_uint(0x10, 6) ;; nobounce - int_msg_info$0 ihr_disabled:Bool bounce:Bool bounced:Bool src:MsgAddress -> 010000
+    .store_slice(to_address)
+    .store_coins(amount)
+    .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
+    .store_uint(op, 32)
+    .store_uint(query_id, 64);
+
+  if (~ builder_null?(payload)) {
+    msg = msg.store_builder(payload);
+  }
+
+  send_raw_message(msg.end_cell(), send_mode);
+}
+
+() transfer_nft(slice new_nft_owner, slice responser, slice item) impure {
+    var msg = begin_cell()
+     .store_uint(0x18, 6) 
+     .store_slice(item)
+     .store_coins(min_tons_for_storage())
+     .store_uint(1, 1 + 4 + 4 + 64 + 32 + 1 + 1) 
+     .store_ref(
+        begin_cell()
+         .store_uint(0x5fcc3d14, 32)
+         .store_uint(0, 64)
+         .store_slice(new_nft_owner) ;; new nft owner
+         .store_slice(responser) ;; addr for exesses ;; my_address() my_address()
+         .store_uint(0, 1)
+         .store_coins(0)
+         .store_ref(begin_cell().end_cell())
+        .end_cell()
+    )
+     .end_cell();
+    send_raw_message(msg, 0); ;; 
+}
+
+cell calculate_nft_item_state_init(int item_index, cell nft_item_code,slice nft_collection_addr) {
+  cell data = begin_cell().store_uint(item_index, 64).store_slice(nft_collection_addr).end_cell();
+  return begin_cell().store_uint(0, 2).store_dict(nft_item_code).store_dict(data).store_uint(0, 1).end_cell();
+}
+
+slice calculate_nft_item_address(int wc, cell state_init) {
+  return begin_cell().store_uint(4, 3)
+                     .store_int(wc, 8)
+                     .store_uint(cell_hash(state_init), 256)
+                     .end_cell()
+                     .begin_parse();
+}
+
+
+() recv_internal(int my_balance, int msg_value, cell in_msg_full, slice in_msg_body) impure {
+    if (in_msg_body.slice_empty?()) { ;; ignore empty messages
+        return ();
+    }
+
+    slice cs = in_msg_full.begin_parse();
+    int flags = cs~load_uint(4);
+
+    if (flags & 1) { ;; ignore all bounced messages
+        return ();
+    }
+    slice sender_address = cs~load_msg_addr();
+
+    cs~load_msg_addr(); ;; skip dst
+    cs~load_coins(); ;; skip value
+    cs~skip_bits(1); ;; skip extracurrency collection
+    cs~load_coins(); ;; skip ihr_fee
+    int fwd_fee = cs~load_coins(); ;; we use message fwd_fee fors estimation of forward_payload costs
+
+    (int init?,  int index, slice deployer_address, slice offer_owner, cell content) = load_data();
+    if (~ init?) {
+      throw_unless(405, equal_slices(sender_address, deployer_address));
+      
+      ;;Inside msg begin_cell().store_slice(sender_address).store_slice(nft_collection_addr).store_ref(royalty_params).end_cell();
+      slice offer_owner =  in_msg_body~load_msg_addr();
+      cell nft_item_code = in_msg_body~load_ref();
+      slice nft_collection_addr = in_msg_body~load_msg_addr();
+      cell royalty_params = in_msg_body~load_ref();
+
+      cell init_content = begin_cell().store_ref(nft_item_code).store_slice(nft_collection_addr).store_ref(royalty_params).store_uint(0,64).store_coins(msg_value).end_cell();
+
+      store_data(index, deployer_address, offer_owner, init_content);
+      return ();
+    }
+    
+    int op = in_msg_body~load_uint(32);
+    int query_id = in_msg_body~load_uint(64);
+
+    if (op == 1) { ;; just accept coins - to cure problems with not enough funds
+        return ();
+    }
+
+    ;; CANCEL OFFER
+    if(op == 10){
+      ;; BEFORE LOOP MECHANICS
+      ;;data from c4
+      slice cons = content.begin_parse();
+
+      cell nft_item_code = cons~load_ref();
+      slice nft_collection_addr = cons~load_msg_addr();
+      cell royalty_params = cons~load_ref();
+      int check = cons~load_uint(64);
+      int full_price = cons~load_coins();
+      
+      ;; cancel offer - Offer money goes to offer owner
+      ;; offer started loop checke
+      throw_unless(101,check == 0);
+      ;; enough gas
+      throw_unless(103, msg_value > 2 * min_tons_for_storage());
+      ;; check sender == offer_owner
+      throw_unless(104,equal_slices(offer_owner,sender_address));
+      
+      ;; royalty
+      ;; take data from cell
+      slice rs = royalty_params.begin_parse();
+
+      int royalty_fee_factor = rs~load_uint(16); ;; numerator
+      int royalty_fee_base = rs~load_uint(16); ;; denumerator
+      slice royalty_fee_addr = rs~load_msg_addr();
+      
+      ;; send message with royalty
+      int royalty_fee = get_percent(full_price, royalty_fee_factor, royalty_fee_base); ;; 10 1000
+      
+      if (royalty_fee > 0) {
+            builder royalty_transfer = begin_cell()
+                    .store_uint(0x18, 6)
+                    .store_slice(royalty_fee_addr)
+                    .store_coins(royalty_fee)
+                    .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
+                    .store_uint(6, 32)
+                    .store_slice(royalty_msg());
+
+            send_raw_message(royalty_transfer.end_cell(), 3);
+      }
+      
+
+      ;; send money to offer owner
+      int storage_fee = 10000000; ;;0.01 ton
+      raw_reserve(storage_fee, 0); ;; 0 exactly amount nanotoncoins
+
+      send_msg(offer_owner,0,9,query_id,null(),128);
+      
+      ;; save 10
+      ;; check=310
+      cell static_content = begin_cell()
+                              .store_ref(nft_item_code)
+                              .store_slice(nft_collection_addr)
+                              .store_ref(royalty_params)
+                              .store_uint(10,64)
+                              .store_coins(full_price).end_cell(); 
+                          
+      store_data(index, deployer_address, offer_owner, static_content);
+
+      return();
+    }
+
+    ;; loop nft col start
+    if (op == op::ownership_assigned()) {
+      ;; здесь нужно проверить, что TON хватит для транспорта петли
+      throw_unless(709, msg_value > gas_consumption() + min_tons_for_storage());
+
+      ;; take previous owner(real nft owner) from op::ownership_assigned() message
+      ;;cell ownership_cell = in_msg_body~load_ref();
+      ;;slice ownership_msg = ownership_cell.begin_parse();
+      ;;slice prev_owner = ownership_msg~load_msg_addr();
+      slice prev_owner = in_msg_body~load_msg_addr();
+
+
+      ;;data from c4
+      slice cons = content.begin_parse();
+
+      cell nft_item_code = cons~load_ref();
+      slice nft_collection_addr = cons~load_msg_addr();
+      cell royalty_params = cons~load_ref();
+      int check = cons~load_uint(64);
+      int full_price = cons~load_coins();
+
+      ;;cell offer_info = begin_cell().store_coins(full_price).store_slice(prev_owner).end_cell();
+      
+      ;; we save sender address to prevent attack when other contract can send op  op::report_static_data()
+      ;; sender address == nft address
+      cell ownership_content = begin_cell().store_ref(nft_item_code).store_slice(nft_collection_addr).store_ref(royalty_params).store_uint(check,64).store_coins(full_price).store_slice(prev_owner).store_slice(sender_address).end_cell();
+
+      send_msg(sender_address, min_tons_for_storage(), op::get_static_data(), query_id, null(), 64);
+
+      store_data(index, deployer_address, offer_owner, ownership_content);
+
+      return ();
+    }
+    ;; здесь потом нужен будет блокер - например что овнершип assigned флаг ;; не забыть продумать всю механику газа ;; статик заглушка
+    if (op == op::report_static_data()) {
+      ;; достаем из сообщения колекцию и чекаем сходитс ли она с тем что в content nft_collection_addr
+      ;; begin_cell().store_uint(index, 256).store_slice(collection_address
+      ;;cell static_cell = in_msg_body~load_ref();
+      ;;slice static_msg = static_cell.begin_parse();
+      int static_index = in_msg_body~load_uint(256);
+      slice static_nft_collection = in_msg_body~load_msg_addr();
+  
+      ;;data from c4
+      slice cons = content.begin_parse();
+
+      cell nft_item_code = cons~load_ref();
+      slice nft_collection_addr = cons~load_msg_addr();
+      cell royalty_params = cons~load_ref();
+      int check = cons~load_uint(64);
+      int full_price = cons~load_coins();
+      slice prev_owner = cons~load_msg_addr();
+      slice prev_step_nft_addr = cons~load_msg_addr();
+      ;; check that  op::ownership_assigned() and op::report_static_data() are sent from same address
+      throw_unless(710,equal_slices(prev_step_nft_addr,sender_address));
+      ;; check that nft is from collection = not malicios contract which immitates nft
+      ;; calculate nft from index and code
+      cell state_init = calculate_nft_item_state_init(static_index , nft_item_code,nft_collection_addr);
+      slice nft_addr_from_col = calculate_nft_item_address(workchain(), state_init);
+      throw_unless(711,equal_slices(nft_addr_from_col,sender_address));
+
+      ;; check if nft is from offer collection
+      if(equal_slices(nft_collection_addr,static_nft_collection)){
+
+        ;; royalty
+        ;; take data from cell
+        slice rs = royalty_params.begin_parse();
+
+        int royalty_fee_factor = rs~load_uint(16); ;; numerator
+        int royalty_fee_base = rs~load_uint(16); ;; denumerator
+        slice royalty_fee_addr = rs~load_msg_addr();
+
+        ;; send message with royalty
+        int royalty_fee = get_percent(full_price, royalty_fee_factor, royalty_fee_base); ;; 10 1000
+        if (royalty_fee > 0) {
+              builder royalty_transfer = begin_cell()
+                      .store_uint(0x18, 6)
+                      .store_slice(royalty_fee_addr)
+                      .store_coins(royalty_fee)
+                      .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
+                      .store_uint(96, 32)
+                      .store_slice(royalty_msg());
+
+              send_raw_message(royalty_transfer.end_cell(), 3);
+        }
+
+        ;; Send money to NFT prev owner
+        int storage_fee = 10000000; ;;0.01 ton
+        raw_reserve(storage_fee, 0); ;; 0 exactly amount nanotoncoins
+
+        send_msg(prev_owner,0,69,query_id,null(),128);
+
+        ;; start loan - save data
+        cell static_content = begin_cell()
+                                .store_ref(nft_item_code)
+                                .store_slice(nft_collection_addr)
+                                .store_ref(royalty_params)
+                                .store_uint(1,64)
+                                .store_coins(full_price)
+                                .store_slice(prev_owner)
+                                .store_slice(sender_address) ;; nft address
+                                .store_uint(now(), 32).end_cell(); ;; start loan
+
+        store_data(index, deployer_address, offer_owner, static_content);
+
+      } else {
+        ;;throw error
+        throw(810);
+      }
+
+      return ();
+    }    
+
+    ;;check>0 
+    ;;Take from content all data
+    ;;data from c4
+    slice cons = content.begin_parse();
+
+    cell nft_item_code = cons~load_ref();
+    slice nft_collection_addr = cons~load_msg_addr();
+    cell royalty_params = cons~load_ref();
+    int check = cons~load_uint(64);
+    ;; throw unless check > 1
+
+    int full_price = cons~load_coins();
+    slice prev_owner = cons~load_msg_addr();
+    slice nft_address = cons~load_msg_addr();
+    int credit_start_at = cons~load_uint(32);
+
+
+
+    if(op == 4){
+      ;;NFT to offer owner => borrower не вернул деньги
+
+      ;; offer started loop checked
+      throw_unless(411,check > 0);
+      ;; credit ended
+      throw_unless(422,credit_start_at +  1209600 < now());
+      ;; enough gas
+      throw_unless(433, msg_value > 2 * min_tons_for_storage());
+      ;; check that op is from offer owner address
+      throw_unless(444,equal_slices(offer_owner,sender_address));
+
+      ;; Отправляем НФТ владельцу оффера
+      ;; сообщение приходит от владельца оффера в ответ ему приходит NFT 
+      
+      transfer_nft(offer_owner, my_address(), nft_address);
+
+      ;; loan ended nft transfered check=4
+      cell static_content = begin_cell()
+                              .store_ref(nft_item_code)
+                              .store_slice(nft_collection_addr)
+                              .store_ref(royalty_params)
+                              .store_uint(4,64)
+                              .store_coins(full_price)
+                              .store_slice(prev_owner)
+                              .store_slice(sender_address) ;; nft address
+                              .store_uint(now(), 32).end_cell(); ;; start loan
+                              
+      store_data(index, deployer_address, offer_owner, static_content);
+      return ();
+    }
+    if(op == 3){
+      ;;NFT to prev_owner, money with loan percentage to offer owner
+
+      ;; offer started loop checke
+      throw_unless(311,check > 0);
+      ;; credit ended
+      throw_unless(322,credit_start_at +  1209600 > now());
+      ;; enough gas
+      throw_unless(333, msg_value > min_tons_for_storage());
+      ;; check that op is from nft owner address
+      throw_unless(344,equal_slices(prev_owner,sender_address));
+
+      ;; count full loan
+      int loan_price = full_price  + get_percent(full_price, 60, 1000);
+      ;; throw if msg is small for loan and send nft
+      throw_unless(355, msg_value > loan_price + min_tons_for_storage()* 2);
+
+      ;; send nft to nft prev owner
+      transfer_nft(prev_owner, my_address(), nft_address);
+      ;; royalty
+      ;; take data from cell
+      slice rs = royalty_params.begin_parse();
+
+      int royalty_fee_factor = rs~load_uint(16); ;; numerator
+      int royalty_fee_base = rs~load_uint(16); ;; denumerator
+      slice royalty_fee_addr = rs~load_msg_addr();
+
+      ;; send message with royalty
+      int royalty_fee = get_percent(full_price, royalty_fee_factor, royalty_fee_base); 
+      if (royalty_fee > 0) {
+            builder royalty_transfer = begin_cell()
+                    .store_uint(0x18, 6)
+                    .store_slice(royalty_fee_addr)
+                    .store_coins(royalty_fee)
+                    .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
+                    .store_uint(6, 32)
+                    .store_slice(royalty_msg());
+      
+            send_raw_message(royalty_transfer.end_cell(), 3);
+      }
+
+
+      ;; send money to offer owner
+      int storage_fee = 10000000; ;;0.01 ton
+      raw_reserve(storage_fee, 0); ;; 0 exactly amount nanotoncoins
+
+      send_msg(offer_owner,0,9,query_id,null(),128);
+
+      ;; save 3
+      ;; check=3
+      cell static_content = begin_cell()
+                              .store_ref(nft_item_code)
+                              .store_slice(nft_collection_addr)
+                              .store_ref(royalty_params)
+                              .store_uint(3,64)
+                              .store_coins(full_price)
+                              .store_slice(prev_owner)
+                              .store_slice(sender_address) ;; nft address
+                              .store_uint(now(), 32).end_cell(); ;; start loan
+                              
+      store_data(index, deployer_address, offer_owner, static_content);
+      return ();
+    }
+
+
+
+    throw(0xffff);
+}
+
+;;
+;;  GET Methods
+;;
+
+(int, int, slice, slice, cell) get_nft_data() method_id {
+  (int init?, int index, slice collection_address, slice owner_address, cell content) = load_data();
+  return (init?, index, collection_address, owner_address, content);
+}
+
+;;slice get_nft_address_by_index(int index) method_id {
+;;    (int init?,  int index, slice deployer_address, slice offer_owner, cell content) = load_data();
+;;    slice cons = content.begin_parse();
+;;    cell nft_item_code = cons~load_ref();
+;;    slice nft_collection_addr = cons~load_msg_addr();
+;;    cell state_init = calculate_nft_item_state_init(index, nft_item_code,nft_collection_addr);
+;;    return calculate_nft_item_address(workchain(), state_init);
+;;}

@@ -1,0 +1,137 @@
+;; Offer Deployer smart contract
+
+;; storage scheme
+;; default#_ royalty_factor:uint16 royalty_base:uint16 royalty_address:MsgAddress = RoyaltyParams;
+;; Map to NFT Collection
+;; owner_address owner_address(MPaddr) 257
+;; next_item_index next_item_index 64
+;; content Cell with collection_addr inside
+;; nft_item_code offer_item_code 64
+;; royalty_params numerator 16 denominator 15 destination 257
+
+
+
+
+(slice, int, cell, cell, cell) load_data() inline {
+  var ds = get_data().begin_parse();
+  return
+    (
+     ds~load_msg_addr(), ;; owner_address - marketplace addr
+     ds~load_uint(64), ;; next_item_index
+     ds~load_ref(), ;; content cell with collection addr inside + nft_item_code for loop check
+     ds~load_ref(), ;; offer_item_code 
+     ds~load_ref()  ;; royalty_params
+     );
+}
+
+() save_data(slice owner_address, int next_item_index, cell content, cell offer_item_code , cell royalty_params) impure inline {
+  set_data(begin_cell()
+    .store_slice(owner_address)
+    .store_uint(next_item_index, 64)
+    .store_ref(content)
+    .store_ref(offer_item_code)
+    .store_ref(royalty_params)
+    .end_cell());
+}
+
+cell calculate_offer_item_state_init(int item_index, cell offer_item_code) {
+  cell data = begin_cell().store_uint(item_index, 64).store_slice(my_address()).end_cell();
+  return begin_cell().store_uint(0, 2).store_dict(offer_item_code).store_dict(data).store_uint(0, 1).end_cell();
+}
+
+slice calculate_offer_item_address(int wc, cell state_init) {
+  return begin_cell().store_uint(4, 3)
+                     .store_int(wc, 8)
+                     .store_uint(cell_hash(state_init), 256)
+                     .end_cell()
+                     .begin_parse();
+}
+
+() deploy_offer_item(int item_index, cell offer_item_code, int amount, cell offer_content) impure {
+  cell state_init = calculate_offer_item_state_init(item_index, offer_item_code);
+  slice offer_address = calculate_offer_item_address(workchain(), state_init);
+  var msg = begin_cell()
+            .store_uint(0x18, 6)
+            .store_slice(offer_address)
+            .store_coins(0)
+            .store_uint(4 + 2 + 1, 1 + 4 + 4 + 64 + 32 + 1 + 1 + 1)
+            .store_ref(state_init)
+            .store_ref(offer_content);
+  send_raw_message(msg.end_cell(), 64); ;; Carry all the remaining value of the inbound message in addition to the value initially indicated in the new message
+};; as we send 0 => inbound value - transfer fee
+
+
+() recv_internal(cell in_msg_full, slice in_msg_body) impure {
+    if (in_msg_body.slice_empty?()) { ;; ignore empty messages
+        return ();
+    }
+    slice cs = in_msg_full.begin_parse();
+    int flags = cs~load_uint(4);
+
+    if (flags & 1) { ;; ignore all bounced messages
+        return ();
+    }
+    slice sender_address = cs~load_msg_addr();
+
+    int op = in_msg_body~load_uint(32);
+    int query_id = in_msg_body~load_uint(64);
+
+    var (owner_address, next_item_index, content, offer_item_code, royalty_params) = load_data();
+
+    if (op == 1) { ;; deploy new offer
+      int item_index = in_msg_body~load_uint(64);
+      throw_unless(402, item_index <= next_item_index);
+      var is_last = item_index == next_item_index;
+      ;; lets collect our offer content cell
+      slice nca = content.begin_parse();
+      slice nft_collection_addr = nca~load_msg_addr();
+      cell nft_item_code = nca~load_ref();
+
+      ;;slice rs = royalty_params.begin_parse();
+      ;;int numerator = rs~load_uint(16);
+      ;;int denominator = rs~load_uint(16);
+      ;;slice royalty_address = rs~load_msg_addr();
+      ;;
+      cell offer_content = begin_cell().store_slice(sender_address).store_ref(nft_item_code).store_slice(nft_collection_addr).store_ref(royalty_params).end_cell();
+
+      deploy_offer_item(item_index, offer_item_code, in_msg_body~load_coins(), offer_content);
+      if (is_last) {
+        next_item_index += 1;
+        save_data(owner_address, next_item_index, content, offer_item_code, royalty_params);
+      }
+      return ();
+
+
+    }
+
+    throw(0xffff);
+}
+
+
+
+;; Get methods 
+;; next_item_index cell content - nft_collection_addr  owner_addr(mp addr)   
+(int, cell, slice) get_collection_data() method_id {
+  var (owner_address, next_item_index, content, _, _) = load_data();
+  ;;slice cs = content.begin_parse();
+  return (next_item_index, content, owner_address);
+}
+
+slice get_nft_address_by_index(int index) method_id {
+    var (_, _, _, nft_item_code, _) = load_data();
+    cell state_init = calculate_offer_item_state_init(index, nft_item_code);
+    return calculate_offer_item_address(0, state_init);
+}
+
+(int, int, slice) royalty_params() method_id {
+     var (_, _, _, _, royalty) = load_data();
+     slice rs = royalty.begin_parse();
+     return (rs~load_uint(16), rs~load_uint(16), rs~load_msg_addr());
+}
+
+;;cell content - nft_collection_addr - пустышка
+cell get_nft_content(int index, cell individual_nft_content) method_id {
+  var (_, _, content, _, _) = load_data();
+
+  return content;
+}
