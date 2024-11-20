@@ -3,11 +3,16 @@
 
 ;;Storage max 1023 bits
 ;;
+;;index	int64	index for sharding
+;;deployer_address	Address	Deployer address
+;;owner_address	Address	Offer owner address
+;;content	Cell	data for loan logic
 
-;;nft_item_code	Cell	from deployer needed for nft check
-;;nft_collection_addr	Address	from deployer needed for nft check
-;;royalty_params	Cell	royalty_params(NFT standard typo)
-;;check	int64	op logic param
+;; content
+;;;;nft_item_code	Cell	from deployer needed for nft check
+;;;;nft_collection_addr	Address	from deployer needed for nft check
+;;;;royalty_params	Cell	royalty_params(NFT standard typo)
+;;;;check	int64	op logic param
 ;;;;full_price	Coins	loan price
 ;;;;prev_owner	Address	borrower address
 ;;;;sender_address	Address	nft address
