@@ -3,20 +3,18 @@
 
 ;;Storage max 1023 bits
 ;;
-;; offer_index   ;; + stc  64
-;; деплоер info ref  ;; + ref
-  ;; Адрес деплоера
-  ;; Адрес коллекции заима
-  ;; Адрес роялти 
-;; владелец оффера ;; + max    267
-;; чек -статус офера ;; + stc  64
 
-;; nft_prev_owner 267 
-;; credit_start_time 32
+;;nft_item_code	Cell	from deployer needed for nft check
+;;nft_collection_addr	Address	from deployer needed for nft check
+;;royalty_params	Cell	royalty_params(NFT standard typo)
+;;check	int64	op logic param
+;;;;full_price	Coins	loan price
+;;;;prev_owner	Address	borrower address
+;;;;sender_address	Address	nft address
+;;;;start_loan	int32	loan start time
 
-;; total: 64 * 2 + 267 * 2 + 32 =  694 maximum bits
 
-int min_tons_for_storage() asm "10000000 PUSHINT"; ;; 0.01 TON - итак есть
+int min_tons_for_storage() asm "10000000 PUSHINT"; ;; 0.01 TON 
 ;; Note that 2 * gas_consumptions is expected to be able to cover fees on nft collection check loop
 int gas_consumption() asm "15000000 PUSHINT"; ;; 0.015 TON
 
