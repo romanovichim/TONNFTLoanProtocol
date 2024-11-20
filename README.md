@@ -1,10 +1,14 @@
 # TON NFT LOAN Protocol
 ## Introduction
-![ton nft loan protocol](https://gist.github.com/user-attachments/assets/67014e83-8a8e-49b5-8632-270a6f3761ab.jpg)
+![ton nft loan protocol](./images/start_image.jpg)
 ------
 
 If you want to support v2 development you can donate any amount of coins to this ton address ☺️
+
 `UQBLoIcP6PdyJpi1Qo2tF14Xmb7uvhIq3mEndXkqRDBQRRP2`
+
+> Our community [@ton_learn](./intro/intro.md) 
+
 ### What is NFT Loan Protocol
 NFT Loan Protocol is a protocol where Lenders provide liquidity for collections on an orderbook. Hodlers of the NFT can instantly take out a loan, by putting up the NFT as collateral. 
 
@@ -55,13 +59,13 @@ The nft item contract is a standard [NFT Item](https://github.com/ton-blockchain
 ## Calls schema
 
 ### create offer - take offer
-![create offer ton nft loan protocol offer](https://gist.github.com/user-attachments/assets/79528d4c-5fcd-4190-bf58-cc2bb48a97c4.jpg)
+![create offer ton nft loan protocol offer](./images/create_offer.png)
 ### cancel offer
-![cancel offer ton nft loan protocol offer](https://gist.github.com/user-attachments/assets/fa5c2704-9fe3-4111-9ec6-eb993ea5d57a.png)
+![cancel offer ton nft loan protocol offer](./images/cancel_offer.png)
 ### return full loan (Lender takes NFT after loan time ended)
-![return nft nft loan protocol offer](https://gist.github.com/user-attachments/assets/add65d0e-c184-4a81-967c-b61d3e501620.png)
+![return nft nft loan protocol offer](./images/return_ton.png)
 ### return nft (Borrower returns loan + interest before loan time ended)
-![return nft nft loan protocol offer](https://gist.github.com/user-attachments/assets/6cb73405-fff0-4a29-b9ef-2eeab9b383f2.png)
+![return nft nft loan protocol offer](./images/return_nft.png)
 
 ## Calls Description
 ### Deployer
